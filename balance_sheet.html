@@ -3,10 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>个人资产负债表与净值管理系统</title>
+    <title>个人资产负债表与净值管理系统 (云同步)</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
     <style>
         /* 深色背景 */
         body { background-color: #0f172a; color: #e2e8f0; font-family: 'Inter', sans-serif; }
@@ -32,12 +36,12 @@
     
     <div class="flex justify-between items-center mb-4">
         <div>
-            <h1 class="text-2xl font-bold text-white">个人资产负债表与净值管理</h1>
-            <p class="text-slate-400 text-sm">数据安全：全部存储于浏览器本地</p>
+            <h1 class="text-2xl font-bold text-white">个人资产负债表与净值管理（云同步）</h1>
+            <p class="text-slate-400 text-sm">数据安全：当前通过 Firebase 实时同步</p>
         </div>
         <div class="flex gap-2">
             <button @click="exportData" class="btn bg-slate-600 hover:bg-slate-500 text-white text-sm">导出备份</button>
-            <button @click="triggerImport" class="btn bg-slate-600 hover:bg-slate-500 text-white text-sm">导入数据</button>
+            <button @click="triggerImport" class="btn bg-slate-600 hover:bg-slate-500 text-white text-sm">导入本地数据</button>
             <input type="file" id="fileInput" @change="importData" style="display:none">
         </div>
     </div>
@@ -204,6 +208,22 @@
         ]
     };
 
+    // --- Firebase 配置 (已替换为您的密钥) ---
+    const firebaseConfig = {
+        apiKey: "AIzaSyDyXZ4qaFZCMXmP1pCA91KJwrHTyT3HnMQ",
+        authDomain: "my-networth-tracker.firebaseapp.com",
+        databaseURL: "https://my-networth-tracker-default-rtdb.firebaseio.com",
+        projectId: "my-networth-tracker",
+        storageBucket: "my-networth-tracker.firebasestorage.app",
+        messagingSenderId: "499844149842",
+        appId: "1:499844149842:web:0761fbb8ae4beceb92e58b",
+        measurementId: "G-19RJ3XLQR7"
+    };
+
+    // 初始化 Firebase
+    firebase.initializeApp(firebaseConfig);
+    const dbRef = firebase.database().ref('historyData'); // 数据库引用路径
+    
     // --- Vue App ---
     const { createApp, ref, computed, onMounted, nextTick, watch } = Vue;
 
@@ -229,7 +249,7 @@
 
             const inputData = ref(createEmptyInputData());
 
-            // --- 计算属性 ---
+            // --- 计算属性 (逻辑不变) ---
 
             const totalAssets = (record) => {
                 if (!record || !record.assets) return 0;
@@ -273,7 +293,7 @@
             const currentInputAssetsTotal = computed(() => totalAssets(inputData.value));
             const currentInputLiabilitiesTotal = computed(() => totalLiabilities(inputData.value));
 
-            // --- 核心指标计算逻辑 ---
+            // --- 核心指标计算逻辑 (逻辑不变) ---
             const calculateChange = (daysAgo) => {
                 if (!latestRecord.value) return { amount: 0, pct: 0 };
                 
@@ -301,7 +321,7 @@
             const dayStats = computed(() => calculateChange(1));
             const monthStats = computed(() => calculateChange(30)); 
 
-            // --- 格式化工具 ---
+            // --- 格式化工具 (逻辑不变) ---
             const formatCurrency = (val) => {
                 if(val === undefined || val === null) return '0.00';
                 return new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val);
@@ -314,26 +334,54 @@
                 return 'text-slate-400';
             };
 
-            // --- 业务逻辑 ---
-            const loadData = () => {
-                const saved = localStorage.getItem('balance_sheet_data');
-                if (saved) {
-                    historyData.value = JSON.parse(saved);
-                }
-                loadInputData(); // 初始加载今日数据
-                renderCharts();
-            };
+            // --- 业务逻辑：Firebase 替换 LocalStorage ---
 
-            const saveData = () => {
-                localStorage.setItem('balance_sheet_data', JSON.stringify(historyData.value));
-                renderCharts();
+            // **1. 实时监听数据 (代替 loadData)**
+            const startFirebaseListener = () => {
+                dbRef.on('value', (snapshot) => {
+                    const data = snapshot.val();
+                    if (data) {
+                        // Firebase 返回的是一个对象，我们需要将其转换为 Vue 期望的数组格式
+                        // 将 { "2023-11-28": {...}, "2023-11-27": {...} } 转换为数组
+                        historyData.value = Object.keys(data).map(key => data[key]);
+                    } else {
+                        historyData.value = [];
+                    }
+                    loadInputData(); // 重新加载输入框数据
+                    renderCharts();
+                }, (error) => {
+                    console.error("Firebase Read Failed: ", error);
+                    alert("Firebase数据读取失败，请检查数据库权限设置！");
+                });
+            };
+            
+            // **2. 保存/更新数据 (代替 saveData)**
+            const submitData = () => {
+                const date = selectedDate.value;
+                
+                // 校验基础数据完整性
+                if (currentInputAssetsTotal.value === 0 && currentInputLiabilitiesTotal.value === 0) {
+                    alert("资产和负债不能同时为零，请检查输入。");
+                    return;
+                }
+
+                const record = JSON.parse(JSON.stringify({ date, ...inputData.value }));
+
+                // 使用日期作为键名 (Key) 写入 Firebase
+                dbRef.child(date).set(record)
+                    .then(() => {
+                        alert(`记录 ${date} 已保存并同步至云端!`);
+                    })
+                    .catch(error => {
+                        console.error("Firebase Write Failed: ", error);
+                        alert(`记录保存失败：${error.message}`);
+                    });
             };
 
             const loadInputData = () => {
                 const record = historyData.value.find(r => r.date === selectedDate.value);
                 if (record) {
                     // 加载已有记录
-                    // 深度拷贝，防止直接修改历史数据
                     inputData.value = JSON.parse(JSON.stringify(record)); 
                 } else {
                     // 初始化空数据
@@ -346,49 +394,36 @@
                 loadInputData();
             }
 
-            const submitData = () => {
-                const date = selectedDate.value;
-                
-                // 校验基础数据完整性
-                if (currentInputAssetsTotal.value === 0 && currentInputLiabilitiesTotal.value === 0) {
-                    alert("资产和负债不能同时为零，请检查输入。");
-                    return;
-                }
-
-                const record = JSON.parse(JSON.stringify({ date, ...inputData.value }));
-
-                const existingIndex = historyData.value.findIndex(r => r.date === date);
-
-                if (existingIndex !== -1) {
-                    historyData.value[existingIndex] = record;
-                    alert(`记录 ${date} 已更新!`);
-                } else {
-                    historyData.value.push(record);
-                    alert(`记录 ${date} 已创建!`);
-                }
-
-                // 排序并保存
-                historyData.value.sort((a, b) => new Date(a.date) - new Date(b.date));
-                saveData();
-            };
-
             const deleteRecord = (date) => {
-                if(confirm(`确定删除 ${date} 这条记录吗？`)) {
-                    historyData.value = historyData.value.filter(r => r.date !== date);
-                    saveData();
+                if(confirm(`确定删除 ${date} 这条记录吗？云端数据也将被删除！`)) {
+                    // 从 Firebase 删除该记录
+                    dbRef.child(date).remove()
+                        .then(() => {
+                            alert(`记录 ${date} 已从云端删除!`);
+                        })
+                        .catch(error => {
+                            alert(`删除失败：${error.message}`);
+                        });
+                    // Note: historyData.value 会通过 listener 自动更新
                 }
             };
             
             const clearAll = () => {
-                if(confirm('危险操作：这将清空所有历史数据！')) {
-                    historyData.value = [];
-                    saveData();
-                    inputData.value = createEmptyInputData();
+                if(confirm('危险操作：这将清空云端所有历史数据！')) {
+                    dbRef.remove()
+                        .then(() => {
+                            alert('所有云端数据已清空!');
+                            inputData.value = createEmptyInputData();
+                        })
+                        .catch(error => {
+                            alert(`清空失败：${error.message}`);
+                        });
                 }
             }
             
-            // --- 导入导出 ---
+            // --- 导入导出 (逻辑不变，用于备份和本地迁移) ---
             const exportData = () => {
+                // 导出当前 historyData.value 的内容
                 const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(historyData.value));
                 const downloadAnchorNode = document.createElement('a');
                 downloadAnchorNode.setAttribute("href", dataStr);
@@ -408,9 +443,20 @@
                     try {
                         const imported = JSON.parse(e.target.result);
                         if (Array.isArray(imported)) {
-                            historyData.value = imported;
-                            saveData();
-                            alert("导入成功！");
+                            // 将导入的数据转换为 Firebase 期望的 {date: record} 格式
+                            const updates = {};
+                            imported.forEach(record => {
+                                updates[record.date] = record;
+                            });
+                            
+                            // 导入数据并上传到 Firebase
+                            dbRef.set(updates)
+                                .then(() => {
+                                    alert("导入成功！数据已上传到 Firebase 并已同步。");
+                                })
+                                .catch(err => {
+                                    alert(`导入失败，上传到 Firebase 错误: ${err.message}`);
+                                });
                         } else {
                             alert("文件格式不正确");
                         }
@@ -421,72 +467,75 @@
                 reader.readAsText(file);
             };
 
-            // --- 图表绘制 ---
+            // --- 图表绘制 (逻辑不变) ---
             let chartNetWorth = null;
             let chartComposition = null;
 
             const renderCharts = () => {
-                if (historyData.value.length === 0) return;
-                
-                const chartData = [...computedHistory.value].sort((a, b) => new Date(a.date) - new Date(b.date));
-                const dates = chartData.map(d => d.date);
-                const netWorths = chartData.map(d => d.netWorth);
-                const totalAssetsData = chartData.map(d => d.totalAssets);
-                const totalLiabilitiesData = chartData.map(d => d.totalLiabilities);
-
-                // 1. 净值趋势图 (面积图)
-                if (!chartNetWorth) chartNetWorth = echarts.init(document.getElementById('netWorthChart'));
-                chartNetWorth.setOption({
-                    title: { text: '净资产 (资产 - 负债) 走势', textStyle: { color: '#fff' } },
-                    tooltip: { trigger: 'axis' },
-                    legend: { data: ['净资产', '总资产', '总负债'], textStyle: { color: '#94a3b8' }, top: 'bottom' },
-                    grid: { left: '3%', right: '4%', bottom: '10%', containLabel: true },
-                    xAxis: { type: 'category', boundaryGap: false, data: dates, axisLabel: { color: '#94a3b8' } },
-                    yAxis: { type: 'value', axisLabel: { color: '#94a3b8' }, splitLine: { lineStyle: { color: '#334155' } } },
-                    series: [
-                        { name: '净资产', type: 'line', smooth: true, data: netWorths, itemStyle: { color: '#3b82f6' }, areaStyle: {} },
-                        { name: '总资产', type: 'line', smooth: true, data: totalAssetsData, itemStyle: { color: '#22c55e' } },
-                        { name: '总负债', type: 'line', smooth: true, data: totalLiabilitiesData, itemStyle: { color: '#ef4444' } },
-                    ]
-                });
-
-                // 2. 资产构成饼图 (使用最新的记录)
-                if (latestRecord.value) {
-                    if (!chartComposition) chartComposition = echarts.init(document.getElementById('compositionChart'));
+                // 确保在数据更新后 nextTick 渲染，避免重复代码
+                nextTick(() => {
+                    if (historyData.value.length === 0) return;
                     
-                    const assetComposition = [];
-                    config.value.assetGroups.forEach(g => {
-                        g.accounts.forEach(a => {
-                            if (latestRecord.value.assets[a.key] > 0) {
-                                assetComposition.push({
-                                    name: a.name,
-                                    value: latestRecord.value.assets[a.key]
-                                });
-                            }
-                        });
-                    });
+                    const chartData = [...computedHistory.value].sort((a, b) => new Date(a.date) - new Date(b.date));
+                    const dates = chartData.map(d => d.date);
+                    const netWorths = chartData.map(d => d.netWorth);
+                    const totalAssetsData = chartData.map(d => d.totalAssets);
+                    const totalLiabilitiesData = chartData.map(d => d.totalLiabilities);
 
-                    chartComposition.setOption({
-                        title: { text: '当前总资产分布', textStyle: { color: '#fff' } },
-                        tooltip: { trigger: 'item' },
-                        legend: { type: 'scroll', top: 'bottom', textStyle: { color: '#94a3b8' } },
-                        series: [{
-                            name: '资产分布',
-                            type: 'pie',
-                            radius: ['40%', '70%'],
-                            center: ['50%', '45%'],
-                            itemStyle: { borderRadius: 10, borderColor: '#1e293b', borderWidth: 2 },
-                            data: assetComposition
-                        }]
-                    });
-                }
+                    // 1. 净值趋势图 (面积图)
+                    if (!chartNetWorth) chartNetWorth = echarts.init(document.getElementById('netWorthChart'));
+                    chartNetWorth.setOption({
+                        title: { text: '净资产 (资产 - 负债) 走势', textStyle: { color: '#fff' } },
+                        tooltip: { trigger: 'axis' },
+                        legend: { data: ['净资产', '总资产', '总负债'], textStyle: { color: '#94a3b8' }, top: 'bottom' },
+                        grid: { left: '3%', right: '4%', bottom: '10%', containLabel: true },
+                        xAxis: { type: 'category', boundaryGap: false, data: dates, axisLabel: { color: '#94a3b8' } },
+                        yAxis: { type: 'value', axisLabel: { color: '#94a3b8' }, splitLine: { lineStyle: { color: '#334155' } } },
+                        series: [
+                            { name: '净资产', type: 'line', smooth: true, data: netWorths, itemStyle: { color: '#3b82f6' }, areaStyle: {} },
+                            { name: '总资产', type: 'line', smooth: true, data: totalAssetsData, itemStyle: { color: '#22c55e' } },
+                            { name: '总负债', type: 'line', smooth: true, data: totalLiabilitiesData, itemStyle: { color: '#ef4444' } },
+                        ]
+                    }, true); // `true` ensures charts are properly updated
+
+                    // 2. 资产构成饼图 (使用最新的记录)
+                    if (latestRecord.value) {
+                        if (!chartComposition) chartComposition = echarts.init(document.getElementById('compositionChart'));
+                        
+                        const assetComposition = [];
+                        config.value.assetGroups.forEach(g => {
+                            g.accounts.forEach(a => {
+                                if (latestRecord.value.assets[a.key] > 0) {
+                                    assetComposition.push({
+                                        name: a.name,
+                                        value: latestRecord.value.assets[a.key]
+                                    });
+                                }
+                            });
+                        });
+
+                        chartComposition.setOption({
+                            title: { text: '当前总资产分布', textStyle: { color: '#fff' } },
+                            tooltip: { trigger: 'item' },
+                            legend: { type: 'scroll', top: 'bottom', textStyle: { color: '#94a3b8' } },
+                            series: [{
+                                name: '资产分布',
+                                type: 'pie',
+                                radius: ['40%', '70%'],
+                                center: ['50%', '45%'],
+                                itemStyle: { borderRadius: 10, borderColor: '#1e293b', borderWidth: 2 },
+                                data: assetComposition
+                            }]
+                        }, true); // `true` ensures charts are properly updated
+                    }
+                });
             };
             
             // 监听日期变化，自动加载数据
             watch(selectedDate, loadInputData);
 
             onMounted(() => {
-                loadData();
+                startFirebaseListener(); // 启动 Firebase 监听器
                 window.addEventListener('resize', () => {
                     chartNetWorth && chartNetWorth.resize();
                     chartComposition && chartComposition.resize();
