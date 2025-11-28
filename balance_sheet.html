@@ -206,7 +206,13 @@
                     <div class="grid grid-cols-3 gap-3">
                         <div v-for="field in group.fields" :key="field.key">
                             <label class="block text-xs text-slate-400 mb-1">{{ field.name }}</label>
-                            <input type="number" step="0.01" v-model.number="inputData.liabilities[group.key][field.key]" class="input-dark" placeholder="0.00">
+                            <input 
+                                type="number" 
+                                step="0.01" 
+                                v-model.number="inputData.liabilities[group.key][field.key]" 
+                                class="input-dark" 
+                                :placeholder="field.key === 'interest_rate_pct' ? '0.00' : '0.00'"
+                            >
                         </div>
                     </div>
                 </div>
@@ -256,9 +262,10 @@
 <script>
     // --- 核心配置：可手动修改名称和顺序 ---
     
-    // 统一的负债字段定义
+    // 统一的负债字段定义 (已新增 '年利率 (%)')
     const commonLiabilityFields = [
         { name: '总借贷金额', key: 'total_loan' },
+        { name: '年利率 (%)', key: 'interest_rate_pct' }, // 新增字段：年利率
         { name: '月还款额', key: 'monthly_payment' },
         { name: '还款时长 (月)', key: 'duration' },
         { name: '还款剩余金额', key: 'remaining_amount' },
