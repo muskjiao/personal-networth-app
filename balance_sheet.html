@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个人资产负债表与净值管理系统</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        /* 深色背景 */
+        body { background-color: #0f172a; color: #e2e8f0; font-family: 'Inter', sans-serif; }
+        .card { background-color: #1e293b; border-radius: 12px; padding: 20px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+        .input-dark { background: #334155; border: 1px solid #475569; color: white; padding: 8px; border-radius: 6px; width: 100%; }
+        .btn { padding: 8px 16px; border-radius: 6px; cursor: pointer; transition: 0.2s; font-weight: bold; }
+        .btn-primary { background: #3b82f6; color: white; }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-danger { background: #ef4444; color: white; }
+        
+        /* 颜色反转：红涨绿跌 (资产增值为红色) */
+        .up { color: #ef4444; }    
+        .down { color: #22c55e; }  
+        
+        /* 突出显示的净值和负债卡片样式 */
+        .large-metric { padding: 10px 0; border-radius: 8px; margin-top: 5px; }
+        .large-metric .value { font-size: 3rem; font-weight: 700; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+<div id="app" class="p-6 max-w-7xl mx-auto">
+    
+    <div class="flex justify-between items-center mb-4">
+        <div>
+            <h1 class="text-2xl font-bold text-white">个人资产负债表与净值管理</h1>
+            <p class="text-slate-400 text-sm">数据安全：全部存储于浏览器本地</p>
+        </div>
+        <div class="flex gap-2">
+            <button @click="exportData" class="btn bg-slate-600 hover:bg-slate-500 text-white text-sm">导出备份</button>
+            <button @click="triggerImport" class="btn bg-slate-600 hover:bg-slate-500 text-white text-sm">导入数据</button>
+            <input type="file" id="fileInput" @change="importData" style="display:none">
+        </div>
+    </div>
+    
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+        <div class="card border-l-4 border-blue-500">
+            <div class="text-slate-400 text-md">当前净资产 (资产 - 负债)</div>
+            <div class="large-metric text-white">
+                <div class="value">{{ formatCurrency(latestNetWorth) }}</div>
+            </div>
+        </div>
+        <div class="card border-l-4 border-red-500">
+            <div class="text-slate-400 text-md">当前总负债</div>
+            <div class="large-metric text-red-400">
+                <div class="value">{{ formatCurrency(latestTotalLiabilities) }}</div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div class="card">
+            <div class="text-slate-400 text-sm">总资产</div>
+            <div class="text-2xl font-bold text-white mt-1">{{ formatCurrency(latestTotalAssets) }}</div>
+        </div>
+        <div class="card">
+            <div class="text-slate-400 text-sm">净值较昨日涨跌额</div>
+            <div class="text-2xl font-bold mt-1" :class="getDiffClass(dayChange)">{{ formatCurrency(dayChange) }}</div>
+            <div class="mt-2 text-sm text-slate-500">
+                涨跌幅: <span :class="getDiffClass(dayChangePct)">{{ dayChangePct }}%</span>
+            </div>
+        </div>
+        <div class="card">
+            <div class="text-slate-400 text-sm">净值月环比 (近30天)</div>
+            <div class="text-2xl font-bold mt-1" :class="getDiffClass(monthChange)">{{ formatCurrency(monthChange) }}</div>
+            <div class="mt-2 text-sm text-slate-500">
+                涨跌幅: <span :class="getDiffClass(monthChangePct)">{{ monthChangePct }}%</span>
+            </div>
+        </div>
+        <div class="card">
+            <div class="text-slate-400 text-sm">净值年同比 (近365天)</div>
+            <div class="text-2xl font-bold mt-1 text-slate-500">---</div>
+            <div class="mt-2 text-sm text-slate-500">待补充</div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+        <div class="card lg:col-span-2 h-96" id="netWorthChart"></div>
+        <div class="card h-96" id="compositionChart"></div>
+    </div>
+
+    <div class="card overflow-x-auto mb-6">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-bold">历史净值记录</h3>
+            <button @click="clearAll" class="text-xs text-red-400 underline">清空所有数据</button>
+        </div>
+        <table class="w-full text-sm text-left text-slate-300">
+            <thead class="text-xs uppercase bg-slate-700 text-slate-300">
+                <tr>
+                    <th class="px-4 py-3">日期</th>
+                    <th class="px-4 py-3 text-right">总资产</th>
+                    <th class="px-4 py-3 text-right">总负债</th>
+                    <th class="px-4 py-3 text-right">净值</th>
+                    <th class="px-4 py-3 text-right">日涨跌</th>
+                    <th class="px-4 py-3 text-center">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr v-for="(record, index) in sortedHistory" :key="record.date" class="border-b border-slate-700 hover:bg-slate-800">
+                    <td class="px-4 py-3">{{ record.date }}</td>
+                    <td class="px-4 py-3 text-right text-blue-400">{{ formatCurrency(record.totalAssets) }}</td>
+                    <td class="px-4 py-3 text-right text-red-400">{{ formatCurrency(record.totalLiabilities) }}</td>
+                    <td class="px-4 py-3 text-right font-bold text-white">{{ formatCurrency(record.netWorth) }}</td>
+                    <td class="px-4 py-3 text-right">
+                        <span v-if="index < sortedHistory.length - 1" :class="getDiffClass(record.netWorth - sortedHistory[index+1].netWorth)">
+                            {{ formatCurrency(record.netWorth - sortedHistory[index+1].netWorth) }}
+                        </span>
+                        <span v-else>-</span>
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                        <button @click="editRecord(record.date)" class="text-blue-400 hover:text-blue-300 mr-2">编辑</button>
+                        <button @click="deleteRecord(record.date)" class="text-red-400 hover:text-red-300">删除</button>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    
+    <div class="card">
+        <h3 class="text-lg font-bold mb-4 border-b border-slate-700 pb-2">📅 数据录入与修改</h3>
+        
+        <div class="flex items-center gap-4 mb-4">
+            <label class="text-sm">选择日期:</label>
+            <input type="date" v-model="selectedDate" class="input-dark w-48">
+            <button @click="loadInputData" class="btn bg-slate-600 hover:bg-slate-500 text-white text-sm">加载/新建记录</button>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div>
+                <h4 class="font-semibold text-blue-400 mb-3">✅ 资产录入 (总计: {{ formatCurrency(currentInputAssetsTotal) }})</h4>
+                <div v-for="group in config.assetGroups" :key="group.name" class="mb-4 p-3 bg-slate-700 rounded">
+                    <h5 class="text-sm font-bold mb-2">{{ group.name }}</h5>
+                    <div class="grid grid-cols-3 gap-3">
+                        <div v-for="acc in group.accounts" :key="acc.key">
+                            <label class="block text-xs text-slate-400 mb-1">{{ acc.name }}</label>
+                            <input type="number" step="0.01" v-model.number="inputData.assets[acc.key]" class="input-dark" placeholder="0.00">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div>
+                <h4 class="font-semibold text-red-400 mb-3">❌ 负债录入 (总剩余: {{ formatCurrency(currentInputLiabilitiesTotal) }})</h4>
+                <div v-for="group in config.liabilityGroups" :key="group.name" class="mb-4 p-3 bg-slate-700 rounded">
+                    <h5 class="text-sm font-bold mb-2">{{ group.name }}</h5>
+                    <div class="grid grid-cols-3 gap-3">
+                        <div v-for="field in group.fields" :key="field.key">
+                            <label class="block text-xs text-slate-400 mb-1">{{ field.name }}</label>
+                            <input type="number" step="0.01" v-model.number="inputData.liabilities[group.key][field.key]" class="input-dark" placeholder="0.00">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <button @click="submitData" class="btn btn-primary w-full mt-4 h-10">保存/更新 {{ selectedDate }} 的记录</button>
+    </div>
+
+</div>
+
+<script>
+    // --- 核心配置：可手动修改名称和顺序 ---
+    
+    // 统一的负债字段定义
+    const commonLiabilityFields = [
+        { name: '总借贷金额', key: 'total_loan' },
+        { name: '月还款额', key: 'monthly_payment' },
+        { name: '还款时长 (月)', key: 'duration' },
+        { name: '还款剩余金额', key: 'remaining_amount' },
+        { name: '总已还金额', key: 'total_paid' },
+    ];
+    
+    const INITIAL_CONFIG = {
+        // 资产配置
+        assetGroups: [
+            { name: '证券投资', key: 'securities', accounts: [
+                { name: '平安', key: 'pingan' }, 
+                { name: '长桥', key: 'longbridge' }, 
+                { name: '老虎', key: 'tiger' },
+                { name: '欧易', key: 'okx' },
+                { name: '币安', key: 'binance' },
+            ]},
+            { name: '活期资产', key: 'liquid', accounts: [
+                { name: '支付宝', key: 'alipay' },
+                { name: '微信', key: 'wechat' },
+                { name: '银行卡', key: 'bank' },
+                { name: '其它', key: 'other' },
+            ]},
+        ],
+        // 负债配置
+        liabilityGroups: [
+            { name: '房贷', key: 'mortgage', fields: commonLiabilityFields },
+            { name: '车贷', key: 'car_loan', fields: commonLiabilityFields },
+            { name: '闪电贷', key: 'flash_loan', fields: commonLiabilityFields },
+            { name: '其它借贷', key: 'other_loan', fields: commonLiabilityFields },
+        ]
+    };
+
+    // --- Vue App ---
+    const { createApp, ref, computed, onMounted, nextTick, watch } = Vue;
+
+    createApp({
+        setup() {
+            const config = ref(INITIAL_CONFIG);
+            const historyData = ref([]);
+            const selectedDate = ref(new Date().toISOString().split('T')[0]);
+            
+            // 初始化输入数据结构
+            const createEmptyInputData = () => {
+                const assets = {};
+                config.value.assetGroups.forEach(g => g.accounts.forEach(a => assets[a.key] = 0));
+                
+                const liabilities = {};
+                config.value.liabilityGroups.forEach(g => {
+                    liabilities[g.key] = {};
+                    g.fields.forEach(f => liabilities[g.key][f.key] = 0);
+                });
+
+                return { assets, liabilities };
+            };
+
+            const inputData = ref(createEmptyInputData());
+
+            // --- 计算属性 ---
+
+            const totalAssets = (record) => {
+                if (!record || !record.assets) return 0;
+                return Object.values(record.assets).reduce((sum, val) => sum + (parseFloat(val) || 0), 0);
+            };
+
+            const totalLiabilities = (record) => {
+                if (!record || !record.liabilities) return 0;
+                let total = 0;
+                // 负债只统计剩余还款金额，方便计算净值
+                config.value.liabilityGroups.forEach(g => {
+                    const remaining = record.liabilities[g.key]?.remaining_amount;
+                    total += parseFloat(remaining) || 0;
+                });
+                return total;
+            };
+
+            const netWorth = (record) => {
+                return totalAssets(record) - totalLiabilities(record);
+            };
+
+            const computedHistory = computed(() => {
+                return historyData.value.map(record => ({
+                    ...record,
+                    totalAssets: totalAssets(record),
+                    totalLiabilities: totalLiabilities(record),
+                    netWorth: netWorth(record)
+                }));
+            });
+
+            const sortedHistory = computed(() => {
+                return [...computedHistory.value].sort((a, b) => new Date(b.date) - new Date(a.date));
+            });
+
+            const latestRecord = computed(() => sortedHistory.value[0] || null);
+
+            const latestTotalAssets = computed(() => totalAssets(latestRecord.value));
+            const latestTotalLiabilities = computed(() => totalLiabilities(latestRecord.value));
+            const latestNetWorth = computed(() => netWorth(latestRecord.value));
+
+            const currentInputAssetsTotal = computed(() => totalAssets(inputData.value));
+            const currentInputLiabilitiesTotal = computed(() => totalLiabilities(inputData.value));
+
+            // --- 核心指标计算逻辑 ---
+            const calculateChange = (daysAgo) => {
+                if (!latestRecord.value) return { amount: 0, pct: 0 };
+                
+                let prevRecord;
+                if (daysAgo === 1) {
+                    prevRecord = sortedHistory.value[1]; // 日涨跌：上一个记录
+                } else {
+                    // 环比/同比：找到最接近 X 天前的记录
+                    const targetDate = new Date(latestRecord.value.date);
+                    targetDate.setDate(targetDate.getDate() - daysAgo);
+
+                    prevRecord = historyData.value
+                        .filter(r => new Date(r.date) <= targetDate)
+                        .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+                }
+
+                if (!prevRecord) return { amount: 0, pct: 0 };
+
+                const prevNetWorth = netWorth(prevRecord);
+                const diff = latestNetWorth.value - prevNetWorth;
+                const pct = prevNetWorth !== 0 ? ((diff / prevNetWorth) * 100).toFixed(2) : 0;
+                return { amount: diff, pct: pct };
+            };
+
+            const dayStats = computed(() => calculateChange(1));
+            const monthStats = computed(() => calculateChange(30)); 
+
+            // --- 格式化工具 ---
+            const formatCurrency = (val) => {
+                if(val === undefined || val === null) return '0.00';
+                return new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val);
+            };
+
+            // 红涨绿跌 (净值上涨为红色，净值下跌为绿色)
+            const getDiffClass = (val) => {
+                if (val > 0) return 'up';   // 红涨
+                if (val < 0) return 'down'; // 绿跌
+                return 'text-slate-400';
+            };
+
+            // --- 业务逻辑 ---
+            const loadData = () => {
+                const saved = localStorage.getItem('balance_sheet_data');
+                if (saved) {
+                    historyData.value = JSON.parse(saved);
+                }
+                loadInputData(); // 初始加载今日数据
+                renderCharts();
+            };
+
+            const saveData = () => {
+                localStorage.setItem('balance_sheet_data', JSON.stringify(historyData.value));
+                renderCharts();
+            };
+
+            const loadInputData = () => {
+                const record = historyData.value.find(r => r.date === selectedDate.value);
+                if (record) {
+                    // 加载已有记录
+                    // 深度拷贝，防止直接修改历史数据
+                    inputData.value = JSON.parse(JSON.stringify(record)); 
+                } else {
+                    // 初始化空数据
+                    inputData.value = createEmptyInputData();
+                }
+            };
+            
+            const editRecord = (date) => {
+                selectedDate.value = date;
+                loadInputData();
+            }
+
+            const submitData = () => {
+                const date = selectedDate.value;
+                
+                // 校验基础数据完整性
+                if (currentInputAssetsTotal.value === 0 && currentInputLiabilitiesTotal.value === 0) {
+                    alert("资产和负债不能同时为零，请检查输入。");
+                    return;
+                }
+
+                const record = JSON.parse(JSON.stringify({ date, ...inputData.value }));
+
+                const existingIndex = historyData.value.findIndex(r => r.date === date);
+
+                if (existingIndex !== -1) {
+                    historyData.value[existingIndex] = record;
+                    alert(`记录 ${date} 已更新!`);
+                } else {
+                    historyData.value.push(record);
+                    alert(`记录 ${date} 已创建!`);
+                }
+
+                // 排序并保存
+                historyData.value.sort((a, b) => new Date(a.date) - new Date(b.date));
+                saveData();
+            };
+
+            const deleteRecord = (date) => {
+                if(confirm(`确定删除 ${date} 这条记录吗？`)) {
+                    historyData.value = historyData.value.filter(r => r.date !== date);
+                    saveData();
+                }
+            };
+            
+            const clearAll = () => {
+                if(confirm('危险操作：这将清空所有历史数据！')) {
+                    historyData.value = [];
+                    saveData();
+                    inputData.value = createEmptyInputData();
+                }
+            }
+            
+            // --- 导入导出 ---
+            const exportData = () => {
+                const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(historyData.value));
+                const downloadAnchorNode = document.createElement('a');
+                downloadAnchorNode.setAttribute("href", dataStr);
+                downloadAnchorNode.setAttribute("download", "balancesheet_backup_" + new Date().toISOString().split('T')[0] + ".json");
+                document.body.appendChild(downloadAnchorNode);
+                downloadAnchorNode.click();
+                downloadAnchorNode.remove();
+            };
+
+            const triggerImport = () => document.getElementById('fileInput').click();
+
+            const importData = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const imported = JSON.parse(e.target.result);
+                        if (Array.isArray(imported)) {
+                            historyData.value = imported;
+                            saveData();
+                            alert("导入成功！");
+                        } else {
+                            alert("文件格式不正确");
+                        }
+                    } catch (err) {
+                        alert("解析失败");
+                    }
+                };
+                reader.readAsText(file);
+            };
+
+            // --- 图表绘制 ---
+            let chartNetWorth = null;
+            let chartComposition = null;
+
+            const renderCharts = () => {
+                if (historyData.value.length === 0) return;
+                
+                const chartData = [...computedHistory.value].sort((a, b) => new Date(a.date) - new Date(b.date));
+                const dates = chartData.map(d => d.date);
+                const netWorths = chartData.map(d => d.netWorth);
+                const totalAssetsData = chartData.map(d => d.totalAssets);
+                const totalLiabilitiesData = chartData.map(d => d.totalLiabilities);
+
+                // 1. 净值趋势图 (面积图)
+                if (!chartNetWorth) chartNetWorth = echarts.init(document.getElementById('netWorthChart'));
+                chartNetWorth.setOption({
+                    title: { text: '净资产 (资产 - 负债) 走势', textStyle: { color: '#fff' } },
+                    tooltip: { trigger: 'axis' },
+                    legend: { data: ['净资产', '总资产', '总负债'], textStyle: { color: '#94a3b8' }, top: 'bottom' },
+                    grid: { left: '3%', right: '4%', bottom: '10%', containLabel: true },
+                    xAxis: { type: 'category', boundaryGap: false, data: dates, axisLabel: { color: '#94a3b8' } },
+                    yAxis: { type: 'value', axisLabel: { color: '#94a3b8' }, splitLine: { lineStyle: { color: '#334155' } } },
+                    series: [
+                        { name: '净资产', type: 'line', smooth: true, data: netWorths, itemStyle: { color: '#3b82f6' }, areaStyle: {} },
+                        { name: '总资产', type: 'line', smooth: true, data: totalAssetsData, itemStyle: { color: '#22c55e' } },
+                        { name: '总负债', type: 'line', smooth: true, data: totalLiabilitiesData, itemStyle: { color: '#ef4444' } },
+                    ]
+                });
+
+                // 2. 资产构成饼图 (使用最新的记录)
+                if (latestRecord.value) {
+                    if (!chartComposition) chartComposition = echarts.init(document.getElementById('compositionChart'));
+                    
+                    const assetComposition = [];
+                    config.value.assetGroups.forEach(g => {
+                        g.accounts.forEach(a => {
+                            if (latestRecord.value.assets[a.key] > 0) {
+                                assetComposition.push({
+                                    name: a.name,
+                                    value: latestRecord.value.assets[a.key]
+                                });
+                            }
+                        });
+                    });
+
+                    chartComposition.setOption({
+                        title: { text: '当前总资产分布', textStyle: { color: '#fff' } },
+                        tooltip: { trigger: 'item' },
+                        legend: { type: 'scroll', top: 'bottom', textStyle: { color: '#94a3b8' } },
+                        series: [{
+                            name: '资产分布',
+                            type: 'pie',
+                            radius: ['40%', '70%'],
+                            center: ['50%', '45%'],
+                            itemStyle: { borderRadius: 10, borderColor: '#1e293b', borderWidth: 2 },
+                            data: assetComposition
+                        }]
+                    });
+                }
+            };
+            
+            // 监听日期变化，自动加载数据
+            watch(selectedDate, loadInputData);
+
+            onMounted(() => {
+                loadData();
+                window.addEventListener('resize', () => {
+                    chartNetWorth && chartNetWorth.resize();
+                    chartComposition && chartComposition.resize();
+                });
+            });
+
+            return {
+                config,
+                selectedDate,
+                inputData,
+                sortedHistory,
+                latestTotalAssets,
+                latestTotalLiabilities,
+                latestNetWorth,
+                currentInputAssetsTotal,
+                currentInputLiabilitiesTotal,
+                // Stats
+                dayChange: computed(() => dayStats.value.amount),
+                dayChangePct: computed(() => dayStats.value.pct),
+                monthChange: computed(() => monthStats.value.amount),
+                monthChangePct: computed(() => monthStats.value.pct),
+                // Methods
+                submitData,
+                loadInputData,
+                editRecord,
+                deleteRecord,
+                formatCurrency,
+                getDiffClass,
+                exportData,
+                triggerImport,
+                importData,
+                clearAll
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>
