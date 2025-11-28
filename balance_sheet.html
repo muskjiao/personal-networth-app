@@ -73,21 +73,34 @@
         <div class="flex justify-between items-center mb-4 border-b border-slate-700 pb-2">
             <h3 class="text-lg font-bold">📈 性能分析</h3>
             
-            <select v-model="timePeriod" class="input-dark w-32 text-sm">
-                <option 
-                    v-for="period in timePeriods" 
-                    :key="period.key"
-                    :value="period.key"
-                >
-                    {{ period.label }}
-                </option>
-            </select>
+            <div class="flex gap-2">
+                <select v-model="timePeriod" class="input-dark w-24 text-sm">
+                    <option 
+                        v-for="period in timePeriods" 
+                        :key="period.key"
+                        :value="period.key"
+                    >
+                        {{ period.label }}
+                    </option>
+                </select>
+                
+                <select v-model="comparisonDate" class="input-dark w-48 text-sm" :disabled="comparisonOptions.length === 0">
+                    <option value="">{{ comparisonOptions.length > 0 ? `选择一个历史${periodLabels[timePeriod]}记录` : '无历史记录可对比' }}</option>
+                    <option 
+                        v-for="option in comparisonOptions" 
+                        :key="option.value"
+                        :value="option.value"
+                    >
+                        {{ option.label }}
+                    </option>
+                </select>
+            </div>
             
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div class="p-4 rounded-lg bg-slate-700 border-l-4 border-orange-500">
-                <div class="text-sm text-slate-400">净资产 {{ periodLabels[timePeriod] }}涨跌</div>
+                <div class="text-sm text-slate-400">净资产对比 {{ comparisonDateLabel }}</div>
                 <div :class="getDiffClass(currentNetWorthStats.amount, true)" class="text-2xl font-bold mt-1">
                     {{ formatCurrency(currentNetWorthStats.amount) }}
                 </div>
@@ -97,7 +110,7 @@
             </div>
             
             <div class="p-4 rounded-lg bg-slate-700 border-l-4 border-red-500">
-                <div class="text-sm text-slate-400">总资产 {{ periodLabels[timePeriod] }}涨跌</div>
+                <div class="text-sm text-slate-400">总资产对比 {{ comparisonDateLabel }}</div>
                 <div :class="getDiffClass(currentTotalAssetStats.amount, true)" class="text-2xl font-bold mt-1">
                     {{ formatCurrency(currentTotalAssetStats.amount) }}
                 </div>
@@ -107,7 +120,7 @@
             </div>
 
             <div class="p-4 rounded-lg bg-slate-700 border-l-4 border-green-500">
-                <div class="text-sm text-slate-400">总负债 {{ periodLabels[timePeriod] }}涨跌</div>
+                <div class="text-sm text-slate-400">总负债对比 {{ comparisonDateLabel }}</div>
                 <div :class="getDiffClass(currentTotalLiabilitiesStats.amount, false)" class="text-2xl font-bold mt-1">
                     {{ formatCurrency(currentTotalLiabilitiesStats.amount) }}
                 </div>
@@ -353,8 +366,10 @@
             const customAssetNames = ref(getDefaultCustomNames()); 
             const customVisibility = ref(getDefaultVisibility());
             
-            // --- 时间周期配置 (保持不变) ---
-            const timePeriod = ref('month'); 
+            // --- 时间周期配置 ---
+            const timePeriod = ref('day'); // 默认选择日
+            const comparisonDate = ref(''); // 用户选择的对比时间点
+            
             const timePeriods = [
                 { key: 'day', label: '日' }, 
                 { key: 'week', label: '周' }, 
@@ -368,13 +383,6 @@
                 month: '月',
                 quarter: '季',
                 year: '年',
-            };
-            const periodDays = {
-                day: 1,
-                week: 7,
-                month: 30,
-                quarter: 90,
-                year: 365,
             };
             
             const createEmptyInputData = () => {
@@ -537,33 +545,119 @@
                 return total;
             });
             
-            // P&L 计算逻辑 (保持不变)
-            const getHistoricalValue = (metricFunc, daysAgo) => {
-                if (!latestRecord.value || !latestRecord.value.date) return null;
-                if (daysAgo === 0) return metricFunc(latestRecord.value);
-                const targetDate = new Date(latestRecord.value.date);
-                targetDate.setDate(targetDate.getDate() - daysAgo);
-                const prevRecord = historyData.value
-                    .filter(r => new Date(r.date) <= targetDate)
-                    .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
-                return prevRecord ? metricFunc(prevRecord) : null;
-            };
+            // --- P&L 精确对比逻辑重构 ---
 
-            const calculateMetricChange = (metricFunc, daysAgo) => {
+            const getWeekNumber = (d) => {
+                d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+                d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+                var yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+                var weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+                return `${d.getUTCFullYear()}-${weekNo.toString().padStart(2, '0')}`;
+            }
+
+            const getQuarter = (d) => {
+                const month = d.getMonth() + 1;
+                const quarter = Math.ceil(month / 3);
+                return `${d.getFullYear()}-Q${quarter}`;
+            }
+
+            const comparisonOptions = computed(() => {
+                if (historyData.value.length < 2) return [];
+
+                // 对历史数据进行分组
+                const groups = {};
+                historyData.value.forEach(record => {
+                    const date = new Date(record.date);
+                    let key = '';
+                    let label = '';
+
+                    // 确保我们只考虑早于最新记录的日期
+                    if (latestRecord.value && record.date >= latestRecord.value.date) return;
+
+                    switch (timePeriod.value) {
+                        case 'day':
+                            key = record.date;
+                            label = record.date;
+                            break;
+                        case 'week':
+                            key = getWeekNumber(date);
+                            label = key.replace('-', '年 第') + '周';
+                            break;
+                        case 'month':
+                            key = date.getFullYear() + '-' + (date.getMonth() + 1).toString().padStart(2, '0');
+                            label = key.replace('-', '年') + '月';
+                            break;
+                        case 'quarter':
+                            key = getQuarter(date);
+                            label = key.replace('-', '年');
+                            break;
+                        case 'year':
+                            key = date.getFullYear().toString();
+                            label = key + '年';
+                            break;
+                    }
+
+                    if (key) {
+                        if (!groups[key]) {
+                            groups[key] = { key, label, dates: [] };
+                        }
+                        groups[key].dates.push(record.date);
+                    }
+                });
+
+                // 对于每个分组，我们只保留最早的记录日期
+                const options = Object.values(groups).map(group => {
+                    // 找到该分组内最晚的日期（即该周期末的记录）
+                    const latestDateInGroup = group.dates.sort().reverse()[0]; 
+                    return { label: group.label, value: latestDateInGroup };
+                });
+
+                // 按日期降序排列
+                return options.sort((a, b) => new Date(b.value) - new Date(a.value));
+            });
+            
+            // 默认设置 comparisonDate
+            watch([timePeriod, comparisonOptions], () => {
+                // 如果选项有变化，将 comparisonDate 重置为最新的历史记录（options[0].value）
+                if (comparisonOptions.value.length > 0) {
+                    comparisonDate.value = comparisonOptions.value[0].value;
+                } else {
+                    comparisonDate.value = '';
+                }
+            }, { immediate: true });
+
+            const comparisonDateLabel = computed(() => {
+                if (!comparisonDate.value) return '（请选择对比基准）';
+                const option = comparisonOptions.value.find(opt => opt.value === comparisonDate.value);
+                return option ? `(${option.label})` : `(${comparisonDate.value}记录)`;
+            });
+
+            // 获取用于对比的历史记录
+            const comparisonRecord = computed(() => {
+                if (!comparisonDate.value) return null;
+                // 找到与用户选择的 date 匹配的记录
+                return historyData.value.find(r => r.date === comparisonDate.value);
+            });
+
+
+            const calculateMetricChange = (metricFunc) => {
                 const currentVal = metricFunc(latestRecord.value);
-                const previousVal = getHistoricalValue(metricFunc, daysAgo);
-                if (previousVal === null || previousVal === undefined) {
+                const previousRecord = comparisonRecord.value;
+                
+                if (!previousRecord) {
                     return { amount: 0, pct: '---' };
                 }
+                
+                const previousVal = metricFunc(previousRecord);
+
                 const diff = currentVal - previousVal;
                 const pct = previousVal !== 0 ? ((diff / previousVal) * 100).toFixed(2) + '%' : '---';
                 return { amount: diff, pct: pct };
             };
             
-            const currentTotalAssetStats = computed(() => calculateMetricChange(totalAssets, periodDays[timePeriod.value]));
-            const currentTotalLiabilitiesStats = computed(() => calculateMetricChange(totalLiabilities, periodDays[timePeriod.value]));
-            const currentNetWorthStats = computed(() => calculateMetricChange(netWorth, periodDays[timePeriod.value]));
-
+            const currentTotalAssetStats = computed(() => calculateMetricChange(totalAssets));
+            const currentTotalLiabilitiesStats = computed(() => calculateMetricChange(totalLiabilities));
+            const currentNetWorthStats = computed(() => calculateMetricChange(netWorth));
 
             // 格式化工具 (保持不变)
             const formatCurrency = (val) => {
@@ -581,7 +675,7 @@
                 }
             };
             
-            // --- Firebase Listener and CRUD ---
+            // --- Firebase Listener and CRUD (保持不变) ---
 
             const startFirebaseListener = () => {
                 loadCustomConfig(); // 首先加载自定义配置
@@ -716,7 +810,7 @@
                 reader.readAsText(file);
             };
 
-            // --- 图表绘制 (Vertical Bar Composition Chart) (更新：只包含可见的组) ---
+            // --- 图表绘制 (Vertical Bar Composition Chart) (保持不变) ---
             let chartAsset, chartLiability, chartNetWorth = null;
             
             const valueFormatter = function(value) {
@@ -856,13 +950,16 @@
                 customAssetNames,
                 customVisibility,
                 saveCustomNamesAndVisibility,
-                // P&L Stats
+                // P&L Stats (重构后)
                 currentTotalAssetStats,
                 currentTotalLiabilitiesStats,
                 currentNetWorthStats,
                 timePeriod,
                 timePeriods,
                 periodLabels,
+                comparisonDate,
+                comparisonOptions,
+                comparisonDateLabel,
                 // Methods
                 submitData,
                 loadInputData,
