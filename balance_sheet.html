@@ -198,7 +198,7 @@
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div>
                 <h4 class="font-semibold text-red-400 mb-3">✅ 资产录入 (总计: {{ formatCurrency(currentInputAssetsTotal) }})</h4>
-                <div v-for="group in config.assetGroups" :key="group.name" class="mb-4 p-3 bg-slate-700 rounded">
+                <div v-for="group in config.assetGroups" :key="group.key" class="mb-4 p-3 bg-slate-700 rounded" v-show="group.visible">
                     <h5 class="text-sm font-bold mb-2">{{ group.name }}</h5>
                     <div class="grid grid-cols-3 gap-3">
                         <div v-for="acc in group.accounts" :key="acc.key">
@@ -211,7 +211,7 @@
 
             <div>
                 <h4 class="font-semibold text-green-400 mb-3">❌ 负债录入 (总剩余: {{ formatCurrency(currentInputLiabilitiesTotal) }})</h4>
-                <div v-for="group in config.liabilityGroups" :key="group.name" class="mb-4 p-3 bg-slate-700 rounded">
+                <div v-for="group in config.liabilityGroups" :key="group.key" class="mb-4 p-3 bg-slate-700 rounded" v-show="group.visible">
                     <h5 class="text-sm font-bold mb-2">{{ group.name }}</h5>
                     <div class="grid grid-cols-3 gap-3">
                         <div v-for="field in group.fields" :key="field.key">
@@ -226,19 +226,39 @@
     </div>
     
     <div class="card config-card mt-6">
-        <h3 class="text-lg font-bold mb-4 border-b border-slate-600 pb-2 text-blue-400">📝 自定义资产分类名称管理 (云端保存)</h3>
-        <p class="text-sm text-slate-400 mb-4">您可以修改下面 12 个自定义资产账户的名称。修改后点击保存，名称将自动同步到云端并应用到所有图表和录入区。</p>
-
-        <div v-for="group in config.assetGroups.filter(g => g.key.includes('other_asset'))" :key="group.key" class="mb-4 p-3 bg-slate-800 rounded">
-            <h5 class="text-md font-bold text-red-400 mb-3">{{ group.name }} - 名称自定义区</h5>
+        <h3 class="text-lg font-bold mb-4 border-b border-slate-600 pb-2 text-blue-400">⚙️ 资产/负债分类管理 (云端保存)</h3>
+        
+        <div class="mb-6">
+            <h4 class="text-md font-bold mb-3 text-white">大类显示/隐藏勾选</h4>
+            <p class="text-sm text-slate-400 mb-3">勾选的项目将显示在数据录入区，并参与图表计算。未勾选的项目将不显示在 UI，但不影响其历史数据。</p>
+            
             <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                <div v-for="acc in group.accounts" :key="acc.key">
-                    <label class="block text-xs text-slate-400 mb-1">{{ acc.key }} 名称</label>
-                    <input type="text" v-model="customAssetNames[acc.key]" class="input-dark text-xs" :placeholder="acc.name">
+                <div v-for="group in INITIAL_CONFIG.assetGroups" :key="group.key" class="flex items-center">
+                    <input type="checkbox" :id="'vis_a_' + group.key" v-model="customVisibility[group.key]" class="mr-2 text-red-500 bg-gray-700 border-gray-600 rounded focus:ring-red-500">
+                    <label :for="'vis_a_' + group.key" class="text-sm text-red-400">{{ group.name }}</label>
+                </div>
+                
+                <div v-for="group in INITIAL_CONFIG.liabilityGroups" :key="group.key" class="flex items-center">
+                    <input type="checkbox" :id="'vis_l_' + group.key" v-model="customVisibility[group.key]" class="mr-2 text-green-500 bg-gray-700 border-gray-600 rounded focus:ring-green-500">
+                    <label :for="'vis_l_' + group.key" class="text-sm text-green-400">{{ group.name }}</label>
                 </div>
             </div>
         </div>
-        <button @click="saveCustomNames" class="btn bg-blue-600 hover:bg-blue-500 w-full mt-4">保存自定义分类名称到云端</button>
+
+        <div class="mb-4 p-3 bg-slate-800 rounded">
+             <h4 class="text-md font-bold text-red-400 mb-3">自定义资产账户名称 (12 个)</h4>
+             <p class="text-sm text-slate-400 mb-3">修改下面 12 个自定义资产账户的名称：</p>
+            <div v-for="group in INITIAL_CONFIG.assetGroups.filter(g => g.key.includes('other_asset'))" :key="group.key" class="mb-4">
+                <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                    <div v-for="acc in group.accounts" :key="acc.key">
+                        <label class="block text-xs text-slate-400 mb-1">{{ acc.key }} 名称</label>
+                        <input type="text" v-model="customAssetNames[acc.key]" class="input-dark text-xs" :placeholder="acc.name">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <button @click="saveCustomNamesAndVisibility" class="btn bg-blue-600 hover:bg-blue-500 w-full mt-4">保存自定义配置 (名称和可见性) 到云端</button>
     </div>
 
 </div>
@@ -268,7 +288,7 @@
         return accounts;
     };
 
-    const INITIAL_CONFIG = {
+    const INITIAL_CONFIG_BASE = {
         assetGroups: [
             { name: '证券投资', key: 'securities', accounts: [
                 { name: '平安', key: 'pingan' }, 
@@ -296,18 +316,33 @@
         ]
     };
     
+    // 提取所有组的 key 列表
+    const allGroupKeys = [
+        ...INITIAL_CONFIG_BASE.assetGroups.map(g => g.key),
+        ...INITIAL_CONFIG_BASE.liabilityGroups.map(g => g.key)
+    ];
+
     // 生成所有自定义资产账户的默认名称对象
     const getDefaultCustomNames = () => {
         const names = {};
-        INITIAL_CONFIG.assetGroups.filter(g => g.key.includes('other_asset')).forEach(group => {
+        INITIAL_CONFIG_BASE.assetGroups.filter(g => g.key.includes('other_asset')).forEach(group => {
             group.accounts.forEach(acc => {
                 names[acc.key] = acc.name;
             });
         });
         return names;
     }
+    
+    // 生成所有组的默认可见性对象 (默认为 true)
+    const getDefaultVisibility = () => {
+        const visibility = {};
+        allGroupKeys.forEach(key => {
+            visibility[key] = true;
+        });
+        return visibility;
+    }
 
-    // --- Firebase 配置 (已集成您的密钥) ---
+    // --- Firebase 配置 (请替换为您的密钥) ---
     const firebaseConfig = {
         apiKey: "AIzaSyDyXZ4qaFZCMXmP1pCA91KJwrHTyT3HnMQ",
         authDomain: "my-networth-tracker.firebaseapp.com",
@@ -322,18 +357,24 @@
     // 初始化 Firebase
     firebase.initializeApp(firebaseConfig);
     const dbRef = firebase.database().ref('historyData');
-    const dbCustomNamesRef = firebase.database().ref('customNames'); // 新增配置保存路径
+    const dbCustomConfigRef = firebase.database().ref('customConfig'); // 统一的配置保存路径
     
     // --- Vue App ---
     const { createApp, ref, computed, onMounted, nextTick, watch } = Vue;
+    // 修复：确保 watch 在这里被正确解构导入！
 
     createApp({
         setup() {
-            // config 引用 INITIAL_CONFIG，但会在加载自定义名称后被更新
-            const config = ref(INITIAL_CONFIG); 
+            // config 引用 INITIAL_CONFIG_BASE，但会在加载自定义配置后被更新
+            const config = ref(JSON.parse(JSON.stringify(INITIAL_CONFIG_BASE))); 
+            const INITIAL_CONFIG = INITIAL_CONFIG_BASE; // 仅用于模板中的循环和配置UI
+
             const historyData = ref([]);
             const selectedDate = ref(new Date().toISOString().split('T')[0]);
-            const customAssetNames = ref(getDefaultCustomNames()); // 用于保存和加载自定义名称
+            
+            // 自定义配置状态
+            const customAssetNames = ref(getDefaultCustomNames()); 
+            const customVisibility = ref(getDefaultVisibility());
             
             // --- 时间周期配置 (保持不变) ---
             const timePeriod = ref('month'); 
@@ -361,11 +402,11 @@
             
             const createEmptyInputData = () => {
                 const assets = {};
-                // 使用当前的 config.value 确保包含所有账户
-                config.value.assetGroups.forEach(g => g.accounts.forEach(a => assets[a.key] = 0));
+                // 使用当前的 INITIAL_CONFIG_BASE 确保包含所有账户
+                INITIAL_CONFIG_BASE.assetGroups.forEach(g => g.accounts.forEach(a => assets[a.key] = 0));
                 
                 const liabilities = {};
-                config.value.liabilityGroups.forEach(g => {
+                INITIAL_CONFIG_BASE.liabilityGroups.forEach(g => {
                     liabilities[g.key] = {};
                     g.fields.forEach(f => liabilities[g.key][f.key] = 0);
                 });
@@ -375,63 +416,84 @@
 
             const inputData = ref(createEmptyInputData());
             
-            // --- 配置更新逻辑：将自定义名称合并到 config.value ---
-            const updateConfigWithCustomNames = () => {
-                const newConfig = JSON.parse(JSON.stringify(INITIAL_CONFIG));
+            // --- 配置更新逻辑：将自定义名称和可见性合并到 config.value ---
+            const updateConfig = () => {
+                const newConfig = JSON.parse(JSON.stringify(INITIAL_CONFIG_BASE));
                 
+                // 1. 合并自定义名称
                 newConfig.assetGroups.forEach(group => {
                     group.accounts.forEach(account => {
-                        // 如果自定义名称中存在该账户的key，则更新其name
                         if (customAssetNames.value[account.key]) {
                             account.name = customAssetNames.value[account.key];
                         }
                     });
                 });
                 
+                // 2. 合并可见性设置 (适用于所有组)
+                [...newConfig.assetGroups, ...newConfig.liabilityGroups].forEach(group => {
+                    // 检查 visibility 状态，默认为 true
+                    group.visible = customVisibility.value[group.key] !== false;
+                });
+                
                 config.value = newConfig;
-                // 由于图表数据依赖 config.value，所以需要重新渲染图表
-                renderCharts(); 
+                renderCharts(); // 配置更新后重新渲染图表
             };
             
             // --- Firebase Config Load/Save ---
             
-            const loadCustomNames = () => {
-                dbCustomNamesRef.once('value', (snapshot) => {
-                    const loadedNames = snapshot.val();
-                    if (loadedNames) {
-                        // 覆盖默认名称，但保留默认名称中可能新增的字段
-                        customAssetNames.value = {...getDefaultCustomNames(), ...loadedNames};
-                    } else {
-                        customAssetNames.value = getDefaultCustomNames();
-                    }
-                    updateConfigWithCustomNames();
+            const loadCustomConfig = () => {
+                dbCustomConfigRef.once('value', (snapshot) => {
+                    const loadedConfig = snapshot.val();
+                    
+                    // 1. 加载自定义名称
+                    const loadedNames = loadedConfig?.names;
+                    customAssetNames.value = loadedNames 
+                        ? {...getDefaultCustomNames(), ...loadedNames} 
+                        : getDefaultCustomNames();
+
+                    // 2. 加载可见性
+                    const loadedVisibility = loadedConfig?.visibility;
+                    customVisibility.value = loadedVisibility
+                        ? {...getDefaultVisibility(), ...loadedVisibility}
+                        : getDefaultVisibility();
+                    
+                    updateConfig();
                 }, (error) => {
                     console.error("Firebase Config Load Failed: ", error);
-                    updateConfigWithCustomNames(); // 失败也用默认配置启动
+                    updateConfig(); // 失败也用默认配置启动
                 });
             };
 
-            const saveCustomNames = () => {
-                dbCustomNamesRef.set(customAssetNames.value)
+            const saveCustomNamesAndVisibility = () => {
+                const configToSave = {
+                    names: customAssetNames.value,
+                    visibility: customVisibility.value
+                };
+                
+                dbCustomConfigRef.set(configToSave)
                     .then(() => {
-                        alert("自定义分类名称已保存到云端并已更新!");
-                        updateConfigWithCustomNames();
+                        alert("自定义配置（名称和可见性）已保存到云端并已更新!");
+                        updateConfig(); // 更新 config.value 并重绘 UI
                     })
                     .catch(error => {
                         console.error("Firebase Config Save Failed: ", error);
-                        alert(`分类名称保存失败：${error.message}`);
+                        alert(`配置保存失败：${error.message}`);
                     });
             };
 
-            // --- 其他计算属性和方法 (保持不变，但依赖于动态的 config.value) ---
+            // --- 核心计算逻辑：只计算可见的组 ---
 
             const totalAssets = (record) => {
                 if (!record || !record.assets) return 0;
-                // 必须基于 config.value 来遍历，确保计算包含新账户
                 let total = 0;
-                config.value.assetGroups.forEach(g => g.accounts.forEach(a => {
-                    total += parseFloat(record.assets[a.key] || 0);
-                }));
+                config.value.assetGroups.forEach(g => {
+                    // 检查组是否可见
+                    if (g.visible) {
+                        g.accounts.forEach(a => {
+                            total += parseFloat(record.assets[a.key] || 0);
+                        });
+                    }
+                });
                 return total;
             };
 
@@ -439,8 +501,11 @@
                 if (!record || !record.liabilities) return 0;
                 let total = 0;
                 config.value.liabilityGroups.forEach(g => {
-                    const remaining = record.liabilities[g.key]?.remaining_amount;
-                    total += parseFloat(remaining) || 0;
+                    // 检查组是否可见
+                    if (g.visible) {
+                        const remaining = record.liabilities[g.key]?.remaining_amount;
+                        total += parseFloat(remaining) || 0;
+                    }
                 });
                 return total;
             };
@@ -449,6 +514,7 @@
                 return totalAssets(record) - totalLiabilities(record);
             };
 
+            // ... 其他计算属性和方法保持不变 ...
             const computedHistory = computed(() => {
                 return historyData.value.map(record => ({
                     ...record,
@@ -466,9 +532,7 @@
                 return [...computedHistory.value].sort((a, b) => new Date(a.date) - new Date(b.date));
             });
 
-
             const latestRecord = computed(() => sortedHistory.value[0] || null);
-
             const latestTotalAssets = computed(() => totalAssets(latestRecord.value));
             const latestTotalLiabilities = computed(() => totalLiabilities(latestRecord.value));
             const latestNetWorth = computed(() => netWorth(latestRecord.value));
@@ -520,10 +584,10 @@
                 }
             };
             
-            // --- Firebase Listener and CRUD (更新：添加 loadCustomNames) ---
+            // --- Firebase Listener and CRUD ---
 
             const startFirebaseListener = () => {
-                loadCustomNames(); // 首先加载自定义配置
+                loadCustomConfig(); // 首先加载自定义配置
                 
                 dbRef.on('value', (snapshot) => {
                     const data = snapshot.val();
@@ -533,7 +597,7 @@
                         historyData.value = [];
                     }
                     loadInputData();
-                    renderCharts();
+                    // renderCharts() 由 updateConfig() 调用
                 }, (error) => {
                     console.error("Firebase Read Failed: ", error);
                 });
@@ -543,11 +607,14 @@
                 const date = selectedDate.value;
                 
                 if (currentInputAssetsTotal.value === 0 && currentInputLiabilitiesTotal.value === 0) {
-                    alert("资产和负债不能同时为零，请检查输入。");
+                    // 警告：虽然当前显示的资产/负债总和可能为零，但用户可能隐藏了有数据的项目。
+                    // 这里的检查基于当前可见的输入框总和，以防止误操作。
+                    // 警告可以更宽松一些，但为了避免空记录，暂时保留这个检查。
+                    alert("请至少录入一个可见的资产或负债项目的金额。");
                     return;
                 }
 
-                // 提交的数据现在会自动包含新的资产账户
+                // 提交的数据包含所有资产账户，无论是否可见
                 const record = JSON.parse(JSON.stringify({ date, ...inputData.value }));
 
                 dbRef.child(date).set(record)
@@ -578,10 +645,80 @@
                     inputData.value = createEmptyInputData();
                 }
             };
-
-            // ... 其他 CRUD 和导入导出方法 (保持不变) ...
             
-            // --- 图表绘制 (Vertical Bar Composition Chart) (保持不变，但现在依赖 config.value 的最新名称) ---
+            const editRecord = (date) => {
+                selectedDate.value = date;
+                loadInputData();
+            }
+
+            const deleteRecord = (date) => {
+                if(confirm(`确定删除 ${date} 这条记录吗？云端数据也将被删除！`)) {
+                    dbRef.child(date).remove()
+                        .then(() => {
+                            alert(`记录 ${date} 已从云端删除!`);
+                        })
+                        .catch(error => {
+                            alert(`删除失败：${error.message}`);
+                        });
+                }
+            };
+            
+            const clearAll = () => {
+                if(confirm('危险操作：这将清空云端所有历史数据！')) {
+                    dbRef.remove()
+                        .then(() => {
+                            alert('所有云端数据已清空!');
+                            inputData.value = createEmptyInputData();
+                        })
+                        .catch(error => {
+                            alert(`清空失败：${error.message}`);
+                        });
+                }
+            }
+            
+            // --- 导入导出 (保持不变) ---
+            const exportData = () => {
+                const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(historyData.value));
+                const downloadAnchorNode = document.createElement('a');
+                downloadAnchorNode.setAttribute("href", dataStr);
+                downloadAnchorNode.setAttribute("download", "balancesheet_backup_" + new Date().toISOString().split('T')[0] + ".json");
+                document.body.appendChild(downloadAnchorNode);
+                downloadAnchorNode.click();
+                downloadAnchorNode.remove();
+            };
+
+            const triggerImport = () => document.getElementById('fileInput').click();
+
+            const importData = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const imported = JSON.parse(e.target.result);
+                        if (Array.isArray(imported)) {
+                            const updates = {};
+                            imported.forEach(record => {
+                                updates[record.date] = record;
+                            });
+                            dbRef.set(updates)
+                                .then(() => {
+                                    alert("导入成功！数据已上传到 Firebase 并已同步。");
+                                })
+                                .catch(err => {
+                                    alert(`导入失败，上传到 Firebase 错误: ${err.message}`);
+                                });
+                        } else {
+                            alert("文件格式不正确");
+                        }
+                    } catch (err) {
+                        alert("解析失败");
+                    }
+                };
+                reader.readAsText(file);
+            };
+
+            // --- 图表绘制 (Vertical Bar Composition Chart) (更新：只包含可见的组) ---
             let chartAsset, chartLiability, chartNetWorth = null;
             
             const valueFormatter = function(value) {
@@ -595,7 +732,7 @@
 
                 chart.setOption({
                     title: { text: title, textStyle: { color: '#fff' } },
-                    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                    tooltip: { trigger: 'axis' },
                     grid: { left: '3%', right: '4%', bottom: '15%', containLabel: true },
                     
                     xAxis: { 
@@ -629,14 +766,17 @@
                     const dates = dataForCharts.map(d => d.date);
                     const latest = latestRecord.value;
                     
-                    // --- 4. 资产构成 (使用 config.value 的最新名称) ---
+                    // --- 4. 资产构成 (只包含可见的组) ---
                     const assetCategories = [];
                     const assetValues = [];
                     config.value.assetGroups.forEach(group => {
-                        group.accounts.forEach(account => {
-                            assetCategories.push(account.name); // 使用 config.value 中的最新名称
-                            assetValues.push(latest?.assets[account.key] || 0);
-                        });
+                        // 检查组是否可见
+                        if (group.visible) {
+                            group.accounts.forEach(account => {
+                                assetCategories.push(account.name); 
+                                assetValues.push(latest?.assets[account.key] || 0);
+                            });
+                        }
                     });
                     chartAsset = renderCompositionBarChart(
                         'assetAnalysisChart', 
@@ -646,12 +786,15 @@
                         '#ef4444'
                     );
 
-                    // --- 5. 负债构成 ---
+                    // --- 5. 负债构成 (只包含可见的组) ---
                     const liabilityCategories = [];
                     const liabilityValues = [];
                     config.value.liabilityGroups.forEach(group => {
-                        liabilityCategories.push(group.name);
-                        liabilityValues.push(latest?.liabilities[group.key]?.remaining_amount || 0);
+                        // 检查组是否可见
+                        if (group.visible) {
+                            liabilityCategories.push(group.name);
+                            liabilityValues.push(latest?.liabilities[group.key]?.remaining_amount || 0);
+                        }
                     });
                     chartLiability = renderCompositionBarChart(
                         'liabilityAnalysisChart', 
@@ -702,6 +845,7 @@
 
             return {
                 config,
+                INITIAL_CONFIG, // 供模板中配置区使用
                 selectedDate,
                 inputData,
                 sortedHistory,
@@ -710,9 +854,10 @@
                 latestNetWorth,
                 currentInputAssetsTotal,
                 currentInputLiabilitiesTotal,
-                // Custom Name Management
+                // Custom Config Management
                 customAssetNames,
-                saveCustomNames,
+                customVisibility,
+                saveCustomNamesAndVisibility,
                 // P&L Stats
                 currentTotalAssetStats,
                 currentTotalLiabilitiesStats,
