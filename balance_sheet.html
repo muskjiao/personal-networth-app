@@ -27,30 +27,6 @@
         /* 突出显示的净值和负债卡片样式 */
         .large-metric { padding: 10px 0; border-radius: 8px; margin-top: 5px; }
         .large-metric .value { font-size: 3rem; font-weight: 700; margin-top: 5px; }
-
-        /* 时间选择器样式 */
-        .time-selector { 
-            display: flex; 
-            border: 1px solid #475569; 
-            border-radius: 6px; 
-            overflow: hidden;
-            background: #334155;
-        }
-        .time-selector button {
-            flex-grow: 1;
-            padding: 8px 12px;
-            font-size: 0.875rem;
-            color: #94a3b8;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            transition: background-color 0.2s, color 0.2s;
-        }
-        .time-selector button.active {
-            background-color: #3b82f6;
-            color: white;
-            font-weight: bold;
-        }
         
         /* 自定义配置卡片样式 */
         .config-card { background-color: #334155; }
@@ -96,16 +72,17 @@
     <div class="card mb-6">
         <div class="flex justify-between items-center mb-4 border-b border-slate-700 pb-2">
             <h3 class="text-lg font-bold">📈 性能分析</h3>
-            <div class="time-selector">
-                <button 
+            
+            <select v-model="timePeriod" class="input-dark w-32 text-sm">
+                <option 
                     v-for="period in timePeriods" 
                     :key="period.key"
-                    :class="{ 'active': timePeriod === period.key }"
-                    @click="timePeriod = period.key"
+                    :value="period.key"
                 >
                     {{ period.label }}
-                </button>
-            </div>
+                </option>
+            </select>
+            
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -537,8 +514,28 @@
             const latestTotalLiabilities = computed(() => totalLiabilities(latestRecord.value));
             const latestNetWorth = computed(() => netWorth(latestRecord.value));
 
-            const currentInputAssetsTotal = computed(() => totalAssets(inputData.value));
-            const currentInputLiabilitiesTotal = computed(() => totalLiabilities(inputData.value));
+            const currentInputAssetsTotal = computed(() => {
+                let total = 0;
+                config.value.assetGroups.forEach(g => {
+                    if (g.visible) { // 仅计算可见组的输入总和
+                         g.accounts.forEach(a => {
+                            total += parseFloat(inputData.value.assets[a.key] || 0);
+                        });
+                    }
+                });
+                return total;
+            });
+
+            const currentInputLiabilitiesTotal = computed(() => {
+                let total = 0;
+                config.value.liabilityGroups.forEach(g => {
+                    if (g.visible) { // 仅计算可见组的输入总和
+                        const remaining = inputData.value.liabilities[g.key]?.remaining_amount;
+                        total += parseFloat(remaining) || 0;
+                    }
+                });
+                return total;
+            });
             
             // P&L 计算逻辑 (保持不变)
             const getHistoricalValue = (metricFunc, daysAgo) => {
@@ -606,11 +603,12 @@
             const submitData = () => {
                 const date = selectedDate.value;
                 
-                if (currentInputAssetsTotal.value === 0 && currentInputLiabilitiesTotal.value === 0) {
-                    // 警告：虽然当前显示的资产/负债总和可能为零，但用户可能隐藏了有数据的项目。
-                    // 这里的检查基于当前可见的输入框总和，以防止误操作。
-                    // 警告可以更宽松一些，但为了避免空记录，暂时保留这个检查。
-                    alert("请至少录入一个可见的资产或负债项目的金额。");
+                // 仅检查所有历史数据（包括不可见项目）的总和是否为零
+                const totalAssetHistory = totalAssets({ assets: inputData.value.assets });
+                const totalLiabilitiesHistory = totalLiabilities({ liabilities: inputData.value.liabilities });
+                
+                if (totalAssetHistory === 0 && totalLiabilitiesHistory === 0) {
+                    alert("资产和负债总和不能同时为零，请检查输入。");
                     return;
                 }
 
